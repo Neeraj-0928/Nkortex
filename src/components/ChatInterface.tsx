@@ -11,6 +11,7 @@ import {
     Download,
     Bookmark
 } from "lucide-react";
+import MarkdownIt from "markdown-it";
 import AIChatModel from "@/components/AIChatModel";
 
 import { useChat } from "@/context/ChatContext";
@@ -27,6 +28,12 @@ export default function ChatInterface() {
     } = useChat();
     const [inputValue, setInputValue] = useState("");
     const [showModel, setShowModel] = useState(true);
+
+    const md = new MarkdownIt({
+        html: true,
+        linkify: true,
+        typographer: true
+    });
 
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
@@ -170,13 +177,20 @@ export default function ChatInterface() {
                             className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
                         >
                             <div
-                                className={`max-w-[90%] md:max-w-[80%] p-5 rounded-2xl shadow-2xl relative group whitespace-pre-wrap break-words ${msg.sender === "user"
+                                className={`max-w-[90%] md:max-w-[80%] p-5 rounded-2xl shadow-2xl relative group break-words markdown-content ${msg.sender === "user"
                                     ? "bg-gradient-to-br from-white/10 to-white/5 border border-white/10 text-white rounded-tr-sm"
                                     : "glass-panel text-gray-100 rounded-tl-sm border-l-2 border-l-neon-purple glow-border"
                                     }`}
                                 style={msg.sender === "ai" ? { transform: "translateZ(30px)" } : {}}
                             >
-                                {msg.text}
+                                {msg.sender === "user" ? (
+                                    <div className="whitespace-pre-wrap">{msg.text}</div>
+                                ) : (
+                                    <div 
+                                        dangerouslySetInnerHTML={{ __html: md.render(msg.text) }} 
+                                        className="prose prose-invert max-w-none prose-sm prose-p:leading-relaxed prose-pre:bg-black/50 prose-pre:border prose-pre:border-white/10"
+                                    />
+                                )}
                                 <button
                                     onClick={() => toggleBookmark(msg.id)}
                                     className={`absolute -bottom-2 -right-2 p-2 rounded-full border border-white/10 transition-all scale-75 group-hover:scale-100 ${msg.bookmarked

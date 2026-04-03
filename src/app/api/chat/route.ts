@@ -17,34 +17,51 @@ async function fetchRealTimeJobs(role: string, location: string, skills: string[
     console.log(`[JobSearch] Querying: ${role} in ${location}`);
 
     try {
-        // Smarter Location Logic for Adzuna
-        const indianCities = ["india", "bangalore", "mumbai", "delhi", "pune", "hyderabad", "chennai", "gurgaon", "noida"];
-        const isIndia = indianCities.some(city => location.toLowerCase().includes(city));
-        const targetCountry = isIndia ? "in" : "gb";
+        // --- ADZUNA COUNTRY MAPPING ---
+        const countryMap: { [key: string]: string } = {
+            "india": "in", "bangalore": "in", "mumbai": "in", "delhi": "in", "hyderabad": "in", "chennai": "in", "pune": "in",
+            "usa": "us", "u.s.": "us", "united states": "us", "america": "us", "new york": "us", "california": "us", "sf": "us", "chicago": "us",
+            "uk": "gb", "britain": "gb", "england": "gb", "london": "gb", "manchester": "gb",
+            "canada": "ca", "toronto": "ca", "vancouver": "ca",
+            "australia": "au", "sydney": "au", "melbourne": "au",
+            "germany": "de", "berlin": "de", "munich": "de",
+            "france": "fr", "paris": "fr"
+        };
         
-        const url = `https://api.adzuna.com/v1/api/jobs/${targetCountry}/search/1?app_id=${JOB_APP_ID}&app_key=${JOB_API_KEY}&what=${role}&where=${location}&content-type=application/json`;
-        console.log(`[JobSearch] URL: ${url}`);
+        let targetCountry = "gb"; // Default to UK
+        const locLower = location.toLowerCase();
+        
+        for (const [key, code] of Object.entries(countryMap)) {
+            if (locLower.includes(key)) {
+                targetCountry = code;
+                break;
+            }
+        }
+        
+        const url = `https://api.adzuna.com/v1/api/jobs/${targetCountry}/search/1?app_id=${JOB_APP_ID}&app_key=${JOB_API_KEY}&what=${encodeURIComponent(role)}&where=${encodeURIComponent(location)}&content-type=application/json`;
+        console.log(`[JobSearch] Requesting: ${url}`);
 
         const res = await fetch(url);
         
         if (res.ok) {
             const data = await res.json();
-            console.log(`[JobSearch] Found ${data.results?.length || 0} real jobs.`);
+            console.log(`[JobSearch] Adzuna found ${data.results?.length || 0} real jobs for ${role} in ${location} (${targetCountry}).`);
             if (data.results && data.results.length > 0) {
                 return data.results.map((j: any) => ({
                     title: j.title.replace(/<\/?[^>]+(>|$)/g, ""),
                     company: j.company.display_name,
                     location: j.location.display_name,
                     skills: skills.join(", "),
-                    description: j.description.substring(0, 200).replace(/<\/?[^>]+(>|$)/g, "") + "...",
+                    description: j.description.substring(0, 300).replace(/<\/?[^>]+(>|$)/g, "").trim() + "...",
                     apply_link: j.redirect_url
                 }));
             }
         } else {
-            console.warn(`[JobSearch] Adzuna returned status: ${res.status}`);
+            const errorText = await res.text();
+            console.error(`[JobSearch] Adzuna error (${res.status}):`, errorText);
         }
     } catch (e) {
-        console.error("[JobSearch] Error:", e);
+        console.error("[JobSearch] Network/Fetch error:", e);
     }
     
     console.log("[JobSearch] Falling back to high-quality mock results.");
@@ -94,9 +111,16 @@ export async function POST(req: Request) {
 
         if (intent && intent.mode === "INTERNSHIP_SEARCH") {
             const searchParams = OfflineNLP.createSearchFilter(allUserText);
-            const domain = searchParams.domain || "Software";
+            let domain = searchParams.domain || "Software Engineer";
             const location = searchParams.location || "Remote";
-            contextJobs = await fetchRealTimeJobs(domain, location, ["React", "Python", "SQL"]);
+            
+            // Refine role for internships
+            if (allUserText.includes("intern") && !domain.toLowerCase().includes("intern")) {
+                domain = `${domain} Internship`;
+            }
+            
+            const skills = OfflineNLP.getRelevantSkills(domain);
+            contextJobs = await fetchRealTimeJobs(domain, location, skills);
         }
 
         // --- OFFLINE FALLBACK ---
@@ -111,21 +135,32 @@ export async function POST(req: Request) {
             return createStreamingResponse(offlineResponse);
         }
 
-        const recentMessages = messages.slice(-10);
+        const recentMessages = messages.slice(-20); // More context for better memory
         const chatMessages = recentMessages.map((m: any) => ({
             role: m.sender === "user" ? "user" : "model",
             parts: [{ text: m.text }]
         }));
 
         // Logic Step 2: Gemini Interaction with User's System Prompt
-        const SYSTEM_PROMPT = `
-You are an AI job assistant. Your task is to provide job-related information in a clear, structured, and point-wise format.
+        let SYSTEM_PROMPT = `
+You are NKortex AI, a sophisticated, professional, and friendly artificial intelligence. Your goal is to provide helpful, accurate, and concise information to the user.
+
+Tone and Style:
+- Be conversational and professional.
+- Use Markdown for formatting (bold, italics, lists, code blocks).
+- Keep responses concise and avoid unnecessary fluff.
+- If the user asks about NKortex, explain it as a cutting-edge AI platform for productivity and career growth.
+        `;
+
+        if (intent && intent.mode === "INTERNSHIP_SEARCH") {
+            SYSTEM_PROMPT = `
+You are the NKortex Job Assistant. Your task is to provide job-related information in a clear, structured, and point-wise format using the context provided.
+
+Context: ${JSON.stringify(contextJobs)}
 
 Instructions:
-- Use the job listings provided in the context below.
-- DO NOT write long paragraphs.
-- ALWAYS respond in bullet points or sections.
-- For each job, return this EXACT format:
+- If context is empty, explain that you are scanning for fresh opportunities.
+- Format each listing EXACTLY as follows:
 
 🔍 Job Role:
 - [Title]
@@ -134,55 +169,55 @@ Instructions:
 - [Company Name]
 
 📍 Location:
-- [Remote / Onsite / City]
+- [Location]
 
 💼 Type:
-- [Full-time / Internship / Contract]
+- Full-time / Internship
 
-🧾 Skills Required:
-- [Skill 1]
-- [Skill 2]
+🧾 Skills:
+- List skills here
 
-🔗 Apply Link:
-- [Clickable Link]
+🔗 [Apply Here](link)
 
----
+--- (Divider between jobs)
+            `;
+        }
 
-If multiple jobs are available:
-- Separate each job with a line (----)
-
-Important:
-- Keep responses short, clean, and structured.
-- Only show real jobs from the context: ${JSON.stringify(contextJobs)}
-- If the current results are empty, scanning mock-database instead.
-        `;
-
-        try {
-            // Primary Model: gemini-2.5-flash
-            let geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        async function fetchGemini(model: string, messages: any[], systemPrompt: string, retries = 2): Promise<Response> {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+            const res = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    contents: chatMessages,
-                    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                    contents: messages,
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
                     generationConfig: { maxOutputTokens: 2048, temperature: 0.7 }
                 })
             });
 
-            // Fallback for 429/404 Errors: gemini-1.5-flash-latest
-            if (!geminiRes.ok) {
-                geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: chatMessages,
-                        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-                        generationConfig: { maxOutputTokens: 2048, temperature: 0.7 }
-                    })
-                });
+            if (res.status === 429 && retries > 0) {
+                console.warn(`[NKortex] Rate limited (429). Retrying in 2s... (${retries} left)`);
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                return fetchGemini(model, messages, systemPrompt, retries - 1);
+            }
+            return res;
+        }
+
+        try {
+            // First attempt: Primary Model (gemini-2.5-flash)
+            let geminiRes = await fetchGemini("gemini-2.5-flash", chatMessages, SYSTEM_PROMPT);
+
+            // If primary fails or 404, we don't necessarily want to retry 429 again here as fetchGemini already did it.
+            // But if it's 404 or something else, we try the known stable one.
+            if (!geminiRes.ok && geminiRes.status !== 429) {
+                geminiRes = await fetchGemini("gemini-1.5-flash-latest", chatMessages, SYSTEM_PROMPT);
             }
 
-            if (!geminiRes.ok) throw new Error(`Gemini API Error: ${geminiRes.status}`);
+            if (geminiRes.status === 429) {
+                return createStreamingResponse("📡 **Neural Link Saturated**: NKortex is currently processing high traffic. Please wait 10-15 seconds for 'Neural Cooling' before your next uplink.");
+            }
+
+            if (!geminiRes.ok) throw new Error(`Neural Link Error: ${geminiRes.status}`);
 
             const data = await geminiRes.json();
             let replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Neural transmission returned empty.";
@@ -195,7 +230,7 @@ Important:
             return createStreamingResponse(replyText);
 
         } catch (e) {
-            console.error("Gemini API failed:", e);
+            console.error("NKortex API failed:", e);
             return createStreamingResponse("Neural uplink error: " + (e as Error).message);
         }
     } catch (e) {
@@ -210,8 +245,8 @@ function createStreamingResponse(text: string) {
             // Stream individual characters to preserve all formatting and newlines
             for (let i = 0; i < text.length; i++) {
                 controller.enqueue(encoder.encode(text[i]));
-                // Faster streaming for better UX
-                if (i % 3 === 0) await new Promise(resolve => setTimeout(resolve, 10));
+                // Ultra-fast streaming
+                if (i % 20 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             }
             controller.close();
         }
