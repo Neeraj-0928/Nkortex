@@ -70,8 +70,6 @@ export default function Sidebar() {
         { icon: <Plus size={20} />, label: "New Chat", onClick: createNewChat },
         { icon: <Search size={20} />, label: "Search Chats", onClick: () => document.getElementById('search-history')?.focus() },
         { icon: <ImageIcon size={20} />, label: "Images", onClick: () => alert("Image Generation Mode coming soon in 3.0 update!") },
-        { icon: <Layers size={20} />, label: "Apps", onClick: () => alert("App Integration Hub coming soon!") },
-        { icon: <Code size={20} />, label: "Codex", onClick: () => alert("Developer Codex mode activated.") },
         { icon: <Folder size={20} />, label: "Projects", onClick: () => alert("Local Projects vault offline.") },
     ];
 
